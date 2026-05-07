@@ -23,6 +23,8 @@ from PyQt6.QtWidgets import (
 
 from ..alarm import AlarmManager
 from ..models import TradingBlock
+from ..resources import app_icon
+from ..sample_data import starter_sessions
 from ..storage import SessionStorage
 from ..timer_manager import TimerManager
 from .mini_timer import MiniTimer
@@ -47,6 +49,8 @@ class MainWindow(QMainWindow):
         self._alarm_popups: list[QMessageBox] = []
         self.tray_icon = QSystemTrayIcon(self) if QSystemTrayIcon.isSystemTrayAvailable() else None
         if self.tray_icon:
+            self.tray_icon.setIcon(app_icon())
+            self.tray_icon.setToolTip("Trading Time Block Manager")
             self.tray_icon.setVisible(True)
         self._build_ui()
         self._build_actions()
@@ -72,6 +76,8 @@ class MainWindow(QMainWindow):
         add_button = QPushButton("+ Add Block")
         add_button.setObjectName("PrimaryButton")
         add_button.clicked.connect(self.add_block)
+        starter_button = QPushButton("Load Starter Sessions")
+        starter_button.clicked.connect(self.load_starter_sessions)
         import_button = QPushButton("Import")
         import_button.clicked.connect(self.import_blocks)
         export_button = QPushButton("Export")
@@ -84,6 +90,7 @@ class MainWindow(QMainWindow):
 
         button_row = QHBoxLayout()
         button_row.addWidget(add_button)
+        button_row.addWidget(starter_button)
         button_row.addWidget(import_button)
         button_row.addWidget(export_button)
         button_row.addWidget(mini_button)
@@ -96,7 +103,7 @@ class MainWindow(QMainWindow):
         top.addLayout(heading, stretch=1)
         top.addWidget(self.clock_label)
 
-        self.empty_label = QLabel("No trading blocks yet. Add your first session to begin.")
+        self.empty_label = QLabel("No trading blocks yet. Add a session or load starter sessions to begin.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setObjectName("EmptyState")
 
@@ -116,6 +123,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self.empty_label)
         root.addWidget(scroll, stretch=1)
         self.setCentralWidget(central)
+        self.statusBar().showMessage(f"Sessions file: {self.storage.path}")
 
     def _build_actions(self) -> None:
         """Wire up keyboard shortcuts and menu actions."""
@@ -129,6 +137,7 @@ class MainWindow(QMainWindow):
         add_action.setShortcut("Ctrl+N")
         add_action.triggered.connect(self.add_block)
         file_menu.addAction(add_action)
+        file_menu.addAction("Load Starter Sessions", self.load_starter_sessions)
         file_menu.addAction("Import Sessions", self.import_blocks)
         file_menu.addAction("Export Sessions", self.export_blocks)
         file_menu.addSeparator()
@@ -184,6 +193,21 @@ class MainWindow(QMainWindow):
         if response == QMessageBox.StandardButton.Yes:
             self.blocks = [item for item in self.blocks if item.block_id != block_id]
             self._save_and_refresh()
+
+    def load_starter_sessions(self) -> None:
+        """Load editable example blocks so first-time users see a working app."""
+
+        if self.blocks:
+            response = QMessageBox.question(
+                self,
+                "Replace sessions?",
+                "Load starter sessions and replace your current blocks?",
+            )
+            if response != QMessageBox.StandardButton.Yes:
+                return
+        self.blocks = starter_sessions()
+        self.alarms.reset()
+        self._save_and_refresh()
 
     def import_blocks(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Import sessions", str(Path.home()), "JSON files (*.json)")
@@ -242,15 +266,22 @@ class MainWindow(QMainWindow):
         popup.setIcon(QMessageBox.Icon.Information)
         popup.setStandardButtons(QMessageBox.StandardButton.Ok)
         popup.setModal(False)
-        popup.finished.connect(lambda _result, box=popup: self._alarm_popups.remove(box) if box in self._alarm_popups else None)
+        popup.finished.connect(lambda _result, box=popup: self._forget_alarm_popup(box))
         self._alarm_popups.append(popup)
         popup.show()
+
+    def _forget_alarm_popup(self, popup: QMessageBox) -> None:
+        """Drop closed alarm popups from the retention list."""
+
+        if popup in self._alarm_popups:
+            self._alarm_popups.remove(popup)
 
     def _find_block(self, block_id: str) -> TradingBlock | None:
         return next((block for block in self.blocks if block.block_id == block_id), None)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
         self.timer.stop()
+        self.storage.save(self.blocks)
         self.mini_timer.close()
         super().closeEvent(event)
 

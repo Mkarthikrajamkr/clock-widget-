@@ -14,7 +14,7 @@ A modern Windows desktop application for traders built with **Python + PyQt6**. 
   - At session start
   - Before session ends
 - Popup and sound alert support via Qt.
-- Add, edit, delete, import, and export session templates.
+- Add, edit, delete, import, export, and load starter session templates.
 - Auto-save and auto-load sessions from local JSON storage.
 - Optional floating mini timer widget.
 - Always-on-top mode and keyboard shortcuts.
@@ -26,7 +26,10 @@ A modern Windows desktop application for traders built with **Python + PyQt6**. 
 trading_time_block_manager/
 ├── __init__.py
 ├── alarm.py             # Alarm trigger evaluation and signals
+├── __main__.py          # python -m package entry point
 ├── main.py              # Application entry point
+├── resources.py         # Runtime-generated app icon
+├── sample_data.py       # Starter session templates
 ├── models.py            # TradingBlock model and time/status calculations
 ├── storage.py           # Local JSON persistence and import/export
 ├── timer_manager.py     # One-second Qt timer service
@@ -56,7 +59,14 @@ pip install -r requirements.txt
 ## Run the app
 
 ```powershell
-python -m trading_time_block_manager.main
+python -m trading_time_block_manager
+```
+
+You can also use the console entry point after installing the package in editable mode:
+
+```powershell
+pip install -e .
+trading-time-block-manager
 ```
 
 ## Keyboard shortcuts
@@ -79,7 +89,7 @@ Export/import can be used to move templates between machines.
 Install dependencies first, then run PyInstaller from the project root:
 
 ```powershell
-pyinstaller --noconfirm --windowed --name TradingTimeBlockManager --collect-all PyQt6 -m trading_time_block_manager.main
+.\build_windows.ps1
 ```
 
 The executable will be created under:
@@ -91,7 +101,7 @@ dist/TradingTimeBlockManager/TradingTimeBlockManager.exe
 For a single-file executable, use:
 
 ```powershell
-pyinstaller --noconfirm --onefile --windowed --name TradingTimeBlockManager --collect-all PyQt6 -m trading_time_block_manager.main
+python -m PyInstaller --noconfirm --onefile --windowed --name TradingTimeBlockManager --collect-all PyQt6 run_app.py
 ```
 
 ## Notes for future enhancements

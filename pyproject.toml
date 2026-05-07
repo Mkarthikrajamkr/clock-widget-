@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-time-block-manager"
+version = "1.0.0"
+description = "Dark-mode PyQt6 trading session time block manager"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "PyQt6>=6.6,<7",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0"]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+trading-time-block-manager = "trading_time_block_manager.main:main"
