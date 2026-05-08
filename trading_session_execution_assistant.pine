@@ -1,0 +1,256 @@
+//@version=5
+indicator("Trading Session Execution Assistant", "TSEA", overlay=true, max_labels_count=50, max_lines_count=50)
+
+//──────────────────────────────────────────────────────────────────────────────
+// Trading Session Execution Assistant
+// Ultra-minimal intraday workflow dashboard for discretionary active traders.
+// Times are driven from `timenow`, so the panel keeps updating on live charts.
+//──────────────────────────────────────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Inputs
+// ══════════════════════════════════════════════════════════════════════════════
+groupTime      = "Time Zones"
+nyTz           = input.string("America/New_York", "New York time zone", group=groupTime)
+inTz           = input.string("Asia/Kolkata", "India time zone", group=groupTime)
+
+openSoonMin    = input.int(45, "Opening soon threshold (minutes)", minval=1, maxval=180, group="Session Logic")
+
+asianStartH    = input.int(20, "Asian start hour", minval=0, maxval=23, group="Asian Session")
+asianStartM    = input.int(0, "Asian start minute", minval=0, maxval=59, group="Asian Session")
+asianEndH      = input.int(0, "Asian end hour", minval=0, maxval=23, group="Asian Session")
+asianEndM      = input.int(0, "Asian end minute", minval=0, maxval=59, group="Asian Session")
+
+londonStartH   = input.int(2, "London start hour", minval=0, maxval=23, group="London Session")
+londonStartM   = input.int(0, "London start minute", minval=0, maxval=59, group="London Session")
+londonEndH     = input.int(5, "London end hour", minval=0, maxval=23, group="London Session")
+londonEndM     = input.int(0, "London end minute", minval=0, maxval=59, group="London Session")
+
+nyStartH       = input.int(8, "New York start hour", minval=0, maxval=23, group="New York Session")
+nyStartM       = input.int(30, "New York start minute", minval=0, maxval=59, group="New York Session")
+nyEndH         = input.int(11, "New York end hour", minval=0, maxval=23, group="New York Session")
+nyEndM         = input.int(30, "New York end minute", minval=0, maxval=59, group="New York Session")
+
+lunchStartH    = input.int(12, "Lunch start hour", minval=0, maxval=23, group="Lunch / Low Liquidity")
+lunchStartM    = input.int(0, "Lunch start minute", minval=0, maxval=59, group="Lunch / Low Liquidity")
+lunchEndH      = input.int(13, "Lunch end hour", minval=0, maxval=23, group="Lunch / Low Liquidity")
+lunchEndM      = input.int(30, "Lunch end minute", minval=0, maxval=59, group="Lunch / Low Liquidity")
+
+cmeOpenH       = input.int(8, "CME open hour", minval=0, maxval=23, group="Key Opens")
+cmeOpenM       = input.int(30, "CME open minute", minval=0, maxval=59, group="Key Opens")
+nyOpenH        = input.int(9, "NYSE open hour", minval=0, maxval=23, group="Key Opens")
+nyOpenM        = input.int(30, "NYSE open minute", minval=0, maxval=59, group="Key Opens")
+silverStartH   = input.int(10, "Silver Bullet start hour", minval=0, maxval=23, group="Key Opens")
+silverStartM   = input.int(0, "Silver Bullet start minute", minval=0, maxval=59, group="Key Opens")
+silverEndH     = input.int(11, "Silver Bullet end hour", minval=0, maxval=23, group="Key Opens")
+silverEndM     = input.int(0, "Silver Bullet end minute", minval=0, maxval=59, group="Key Opens")
+
+showBlink      = input.bool(true, "Blink active status dot", group="Visuals")
+showProgress   = input.bool(true, "Show session progress", group="Visuals")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Palette
+// ══════════════════════════════════════════════════════════════════════════════
+color bg        = color.rgb(14, 16, 19)
+color panel     = color.rgb(20, 23, 27)
+color panelSoft = color.rgb(28, 32, 37)
+color grid      = color.rgb(43, 48, 56)
+color txt       = color.rgb(226, 230, 235)
+color txtSoft   = color.rgb(144, 151, 160)
+color muted     = color.rgb(87, 94, 104)
+color asianCol  = color.rgb(151, 217, 172)
+color londonCol = color.rgb(236, 181, 124)
+color nyCol     = color.rgb(135, 185, 236)
+color warnCol   = color.rgb(229, 204, 126)
+color dangerCol = color.rgb(231, 137, 137)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Helpers
+// ══════════════════════════════════════════════════════════════════════════════
+f_minOfDay(_tz) =>
+    hour(timenow, _tz) * 60 + minute(timenow, _tz)
+
+f_mins(_h, _m) =>
+    _h * 60 + _m
+
+f_inWindow(_now, _start, _end) =>
+    _start <= _end ? _now >= _start and _now < _end : _now >= _start or _now < _end
+
+f_untilStart(_now, _start) =>
+    _now <= _start ? _start - _now : 1440 - _now + _start
+
+f_windowLength(_start, _end) =>
+    _end > _start ? _end - _start : 1440 - _start + _end
+
+f_elapsedInWindow(_now, _start, _end) =>
+    f_inWindow(_now, _start, _end) ? (_now >= _start ? _now - _start : 1440 - _start + _now) : 0
+
+f_sessionState(_now, _start, _end, _soon) =>
+    f_inWindow(_now, _start, _end) ? "ACTIVE" : f_untilStart(_now, _start) <= _soon ? "OPENING SOON" : "CLOSED"
+
+f_stateColor(_state, _activeColor) =>
+    _state == "ACTIVE" ? _activeColor : _state == "OPENING SOON" ? warnCol : muted
+
+f_ampmTime(_tz) =>
+    _h24 = hour(timenow, _tz)
+    _m = minute(timenow, _tz)
+    _h12 = _h24 % 12
+    _h12 := _h12 == 0 ? 12 : _h12
+    _ampm = _h24 >= 12 ? "PM" : "AM"
+    str.format("{0}:{1,number,00} {2}", _h12, _m, _ampm)
+
+f_date(_tz) =>
+    str.format("{0,number,00}/{1,number,00}/{2}", month(timenow, _tz), dayofmonth(timenow, _tz), year(timenow, _tz))
+
+f_hm(_mins) =>
+    _h = int(math.floor(_mins / 60))
+    _m = int(_mins % 60)
+    str.format("{0,number,00}h {1,number,00}m remaining", _h, _m)
+
+f_pctText(_pct) =>
+    str.format("{0,number,0}%", math.round(_pct))
+
+f_bar(_pct) =>
+    _blocks = 10
+    _filled = int(math.round(math.max(0, math.min(100, _pct)) / 10))
+    _out = ""
+    for i = 1 to _blocks
+        _out += i <= _filled ? "●" : "·"
+    _out
+
+f_addCell(_tbl, _col, _row, _text, _txtColor, _bg, _size, _align) =>
+    table.cell(_tbl, _col, _row, _text, text_color=_txtColor, bgcolor=_bg, text_size=_size, text_halign=_align)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Session calculations
+// ══════════════════════════════════════════════════════════════════════════════
+nyNow      = f_minOfDay(nyTz)
+asianStart = f_mins(asianStartH, asianStartM)
+asianEnd   = f_mins(asianEndH, asianEndM)
+lonStart   = f_mins(londonStartH, londonStartM)
+lonEnd     = f_mins(londonEndH, londonEndM)
+nyStart    = f_mins(nyStartH, nyStartM)
+nyEnd      = f_mins(nyEndH, nyEndM)
+lunchStart = f_mins(lunchStartH, lunchStartM)
+lunchEnd   = f_mins(lunchEndH, lunchEndM)
+cmeStart   = f_mins(cmeOpenH, cmeOpenM)
+nyOpen     = f_mins(nyOpenH, nyOpenM)
+silverOpen = f_mins(silverStartH, silverStartM)
+silverEnd  = f_mins(silverEndH, silverEndM)
+
+asianState = f_sessionState(nyNow, asianStart, asianEnd, openSoonMin)
+lonState   = f_sessionState(nyNow, lonStart, lonEnd, openSoonMin)
+nyState    = f_sessionState(nyNow, nyStart, nyEnd, openSoonMin)
+lunchState = f_sessionState(nyNow, lunchStart, lunchEnd, openSoonMin)
+
+asianActive = asianState == "ACTIVE"
+lonActive   = lonState == "ACTIVE"
+nyActive    = nyState == "ACTIVE"
+lunchActive = lunchState == "ACTIVE"
+silverActive = f_inWindow(nyNow, silverOpen, silverEnd)
+
+cmeRemaining = f_untilStart(nyNow, cmeStart)
+nyOpenRemaining = f_untilStart(nyNow, nyOpen)
+lunchRemaining = f_untilStart(nyNow, lunchStart)
+
+activeStart = asianActive ? asianStart : lonActive ? lonStart : nyActive ? nyStart : lunchActive ? lunchStart : na
+activeEnd   = asianActive ? asianEnd : lonActive ? lonEnd : nyActive ? nyEnd : lunchActive ? lunchEnd : na
+activePct   = not na(activeStart) ? f_elapsedInWindow(nyNow, activeStart, activeEnd) / f_windowLength(activeStart, activeEnd) * 100 : 0.0
+
+phase = lunchActive ? "Low Liquidity" : silverActive ? "Execution Window" : nyActive and nyNow < nyOpen + 45 ? "High Volatility" : nyActive ? "Momentum Window" : lonActive ? "Momentum Window" : asianActive ? "Range Conditions" : "Low Liquidity"
+phaseColor = phase == "Execution Window" ? nyCol : phase == "High Volatility" ? dangerCol : phase == "Momentum Window" ? londonCol : phase == "Range Conditions" ? asianCol : muted
+
+blinkOn = not showBlink or second(timenow) % 2 == 0
+activeDot = blinkOn ? "●" : "○"
+
+// Workflow phase index: ASIAN → LONDON → NY OPEN → LUNCH → CME → SILVER BULLET
+flowIdx = asianActive ? 0 : lonActive ? 1 : silverActive ? 5 : nyNow >= nyOpen and nyNow < lunchStart ? 2 : lunchActive ? 3 : nyNow >= cmeStart and nyNow < nyOpen ? 4 : -1
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Dashboard
+// ══════════════════════════════════════════════════════════════════════════════
+var table dash = table.new(position.top_right, 4, 14, bgcolor=bg, frame_color=grid, frame_width=1, border_color=bg, border_width=1)
+
+if barstate.islast
+    table.clear(dash, 0, 0, 3, 13)
+
+    // Header
+    f_addCell(dash, 0, 0, "EXECUTION", txtSoft, bg, size.small, text.align_left)
+    f_addCell(dash, 1, 0, "ASSISTANT", txt, bg, size.small, text.align_left)
+    f_addCell(dash, 2, 0, activeDot, phaseColor, bg, size.small, text.align_right)
+    f_addCell(dash, 3, 0, phase, phaseColor, bg, size.small, text.align_right)
+
+    // Clocks
+    f_addCell(dash, 0, 1, "NY", txtSoft, panel, size.small, text.align_left)
+    f_addCell(dash, 1, 1, f_ampmTime(nyTz), txt, panel, size.small, text.align_left)
+    f_addCell(dash, 2, 1, "IND", txtSoft, panel, size.small, text.align_left)
+    f_addCell(dash, 3, 1, f_ampmTime(inTz), txt, panel, size.small, text.align_right)
+
+    f_addCell(dash, 0, 2, "DATE", txtSoft, panel, size.tiny, text.align_left)
+    f_addCell(dash, 1, 2, f_date(nyTz), txtSoft, panel, size.tiny, text.align_left)
+    f_addCell(dash, 2, 2, "MODE", txtSoft, panel, size.tiny, text.align_left)
+    f_addCell(dash, 3, 2, lunchActive ? "DEFENSIVE" : nyActive or lonActive or silverActive ? "EXECUTE" : "OBSERVE", lunchActive ? warnCol : nyActive or lonActive or silverActive ? phaseColor : txtSoft, panel, size.tiny, text.align_right)
+
+    // Main timer
+    f_addCell(dash, 0, 3, "CME OPEN", txtSoft, panelSoft, size.small, text.align_left)
+    f_addCell(dash, 1, 3, "", txtSoft, panelSoft, size.small, text.align_left)
+    f_addCell(dash, 2, 3, "", txtSoft, panelSoft, size.small, text.align_left)
+    f_addCell(dash, 3, 3, f_hm(cmeRemaining), cmeRemaining <= openSoonMin ? warnCol : txt, panelSoft, size.normal, text.align_right)
+
+    // Warnings
+    warningText = nyOpenRemaining <= openSoonMin ? "NY OPEN SOON" : lunchRemaining <= openSoonMin ? "LUNCH APPROACHING" : silverActive ? "SILVER BULLET" : "CALM EXECUTION"
+    warningColor = nyOpenRemaining <= openSoonMin ? nyCol : lunchRemaining <= openSoonMin ? warnCol : silverActive ? nyCol : txtSoft
+    f_addCell(dash, 0, 4, warningText, warningColor, bg, size.tiny, text.align_left)
+    f_addCell(dash, 1, 4, "", txtSoft, bg, size.tiny, text.align_left)
+    f_addCell(dash, 2, 4, showProgress and activePct > 0 ? f_bar(activePct) : "", phaseColor, bg, size.tiny, text.align_right)
+    f_addCell(dash, 3, 4, showProgress and activePct > 0 ? f_pctText(activePct) : "", txtSoft, bg, size.tiny, text.align_right)
+
+    // Session states
+    f_addCell(dash, 0, 5, "SESSION", txtSoft, bg, size.tiny, text.align_left)
+    f_addCell(dash, 1, 5, "STATUS", txtSoft, bg, size.tiny, text.align_left)
+    f_addCell(dash, 2, 5, "", txtSoft, bg, size.tiny, text.align_left)
+    f_addCell(dash, 3, 5, "WINDOW", txtSoft, bg, size.tiny, text.align_right)
+
+    f_addCell(dash, 0, 6, "Asian", asianCol, panel, size.small, text.align_left)
+    f_addCell(dash, 1, 6, asianState, f_stateColor(asianState, asianCol), panel, size.small, text.align_left)
+    f_addCell(dash, 2, 6, asianState == "ACTIVE" ? activeDot : "", asianCol, panel, size.small, text.align_center)
+    f_addCell(dash, 3, 6, "Range", txtSoft, panel, size.tiny, text.align_right)
+
+    f_addCell(dash, 0, 7, "London", londonCol, panel, size.small, text.align_left)
+    f_addCell(dash, 1, 7, lonState, f_stateColor(lonState, londonCol), panel, size.small, text.align_left)
+    f_addCell(dash, 2, 7, lonState == "ACTIVE" ? activeDot : "", londonCol, panel, size.small, text.align_center)
+    f_addCell(dash, 3, 7, "Momentum", txtSoft, panel, size.tiny, text.align_right)
+
+    f_addCell(dash, 0, 8, "New York", nyCol, panel, size.small, text.align_left)
+    f_addCell(dash, 1, 8, nyState, f_stateColor(nyState, nyCol), panel, size.small, text.align_left)
+    f_addCell(dash, 2, 8, nyState == "ACTIVE" ? activeDot : "", nyCol, panel, size.small, text.align_center)
+    f_addCell(dash, 3, 8, "Execute", txtSoft, panel, size.tiny, text.align_right)
+
+    f_addCell(dash, 0, 9, "Lunch", warnCol, panel, size.small, text.align_left)
+    f_addCell(dash, 1, 9, lunchState, f_stateColor(lunchState, warnCol), panel, size.small, text.align_left)
+    f_addCell(dash, 2, 9, lunchState == "ACTIVE" ? activeDot : "", warnCol, panel, size.small, text.align_center)
+    f_addCell(dash, 3, 9, "Low liq", txtSoft, panel, size.tiny, text.align_right)
+
+    // Flow strip
+    f_addCell(dash, 0, 10, "FLOW", txtSoft, bg, size.tiny, text.align_left)
+    f_addCell(dash, 1, 10, "ASIAN → LONDON", flowIdx == 0 ? asianCol : flowIdx == 1 ? londonCol : txtSoft, bg, size.tiny, text.align_left)
+    f_addCell(dash, 2, 10, "NY OPEN → LUNCH", flowIdx == 2 ? nyCol : flowIdx == 3 ? warnCol : txtSoft, bg, size.tiny, text.align_center)
+    f_addCell(dash, 3, 10, "CME → SILVER", flowIdx == 4 ? warnCol : flowIdx == 5 ? nyCol : txtSoft, bg, size.tiny, text.align_right)
+
+    // Execution bias
+    f_addCell(dash, 0, 11, "PHASE", txtSoft, panelSoft, size.tiny, text.align_left)
+    f_addCell(dash, 1, 11, phase, phaseColor, panelSoft, size.small, text.align_left)
+    f_addCell(dash, 2, 11, "LIQUIDITY", txtSoft, panelSoft, size.tiny, text.align_left)
+    f_addCell(dash, 3, 11, lunchActive ? "LOW" : nyActive or lonActive ? "HIGH" : "THIN", lunchActive ? warnCol : nyActive or lonActive ? phaseColor : muted, panelSoft, size.small, text.align_right)
+
+    f_addCell(dash, 0, 12, "NEXT", txtSoft, bg, size.tiny, text.align_left)
+    nextLabel = nyOpenRemaining <= lunchRemaining and nyOpenRemaining <= cmeRemaining ? "NYSE OPEN" : lunchRemaining <= cmeRemaining ? "LUNCH" : "CME OPEN"
+    nextMins = nextLabel == "NYSE OPEN" ? nyOpenRemaining : nextLabel == "LUNCH" ? lunchRemaining : cmeRemaining
+    f_addCell(dash, 1, 12, nextLabel, txt, bg, size.tiny, text.align_left)
+    f_addCell(dash, 2, 12, "", txtSoft, bg, size.tiny, text.align_left)
+    f_addCell(dash, 3, 12, f_hm(nextMins), txtSoft, bg, size.tiny, text.align_right)
+
+    f_addCell(dash, 0, 13, "", muted, bg, size.tiny, text.align_left)
+    f_addCell(dash, 1, 13, "Matte session console", muted, bg, size.tiny, text.align_left)
+    f_addCell(dash, 2, 13, "", muted, bg, size.tiny, text.align_left)
+    f_addCell(dash, 3, 13, "v1.0", muted, bg, size.tiny, text.align_right)
